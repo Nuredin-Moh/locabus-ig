@@ -1,0 +1,24 @@
+name: Verif jeton (temporaire)
+on: { workflow_dispatch: {} }
+jobs:
+  v:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          T: ${{ secrets.IG_TOKEN }}
+          IG: ${{ secrets.IG_USER_ID }}
+          FB: ${{ secrets.FB_PAGE_ID }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.parse
+          T=os.environ['T']; B='https://graph.facebook.com/v21.0/'
+          def g(p, q):
+              q=dict(q); q['access_token']=T
+              try: return json.load(urllib.request.urlopen(B+p+'?'+urllib.parse.urlencode(q)))
+              except urllib.error.HTTPError as e: return {'erreur': e.read().decode()[:300]}
+          d=g('debug_token', {'input_token': T}).get('data', {})
+          print('valide:', d.get('is_valid'), '| type:', d.get('type'), '| expire:', d.get('expires_at'), '| droits:', ','.join(sorted(d.get('scopes', []))))
+          print('IG compte:', g(os.environ['IG'], {'fields': 'username,media_count'}))
+          print('IG limite publication:', g(os.environ['IG'] + '/content_publishing_limit', {'fields': 'quota_usage,config'}))
+          print('Reel FB 26.09:', g('2269791470484372', {'fields': 'status,published,permalink_url'}))
+          PY
