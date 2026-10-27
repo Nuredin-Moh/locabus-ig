@@ -42,6 +42,7 @@
  "video7-prix-total-v2": {
   "ig": "17982697068128753",
   "fb": "2334412077393890",
-  "fb_etat": "PUBLISHED"
+  "fb_etat": "PUBLISHED",
+  "fb_cover": true
  }
 }
