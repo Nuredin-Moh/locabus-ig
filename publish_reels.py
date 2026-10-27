@@ -197,6 +197,14 @@ def main():
             fiche = etat.get(e["cle"], {})
             if not fiche.get("fb"):
                 erreurs += facebook(e, etat, programmer=False)
+            elif not fiche.get("fb_cover"):
+                # couverture refusee juste apres la publication (video encore en traitement) : on reessaie
+                r, err = poser_couverture(fiche["fb"], e["cover"])
+                if err:
+                    erreurs.append(f"FB couverture (nouvel essai) : {err}")
+                else:
+                    fiche["fb_cover"] = True
+                    print("  FB couverture posee (nouvel essai)")
     ecrire_etat(etat)
     print("ETAT:", json.dumps(etat, ensure_ascii=False))
     if erreurs:
