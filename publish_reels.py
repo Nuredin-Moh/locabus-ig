@@ -2,16 +2,24 @@
 # Publie / programme les reels Locabus sur Facebook ET Instagram, avec image de couverture.
 #
 #   python publish_reels.py schedule-fb   -> programme cote Facebook (scheduled_publish_time)
-#   python publish_reels.py publish-ig    -> publie sur Instagram les reels du jour (IG ne se programme pas)
+#   python publish_reels.py publish-ig    -> publie sur Instagram les reels du jour (IG ne se programme pas),
+#                                            et rattrape le reel de la VEILLE pas encore publie jusqu'a
+#                                            03h heure de Zurich (GitHub lance souvent le cron avec 3 a 6 h
+#                                            de retard : le 05.11.2026, passage a 23:38 heure suisse).
+#   python publish_reels.py prevu [mode]  -> dit seulement s'il y a un reel a traiter maintenant
+#                                            (prevu=oui|non, aussi dans $GITHUB_OUTPUT). Aucun appel Meta,
+#                                            aucun jeton requis. reels.yml s'en sert pour ne rien faire
+#                                            quand aucun reel n'est prevu (apres le dernier de reels.json).
 #
 # Etat dans reels_state.json : {"<cle>": {"fb": "<video_id>", "fb_etat": "SCHEDULED|PUBLISHED",
 #                                          "ig": "<media_id>"}} -> idempotent par canal.
 import json, os, sys, time, urllib.request, urllib.parse, urllib.error
 from datetime import datetime, timedelta, timezone
 
-TOKEN = os.environ["IG_TOKEN"]            # page access token permanent (sert IG + FB)
-IG_ID = os.environ["IG_USER_ID"]
-FB_PAGE = os.environ["FB_PAGE_ID"]
+TOKEN = os.environ.get("IG_TOKEN", "")    # page access token permanent (sert IG + FB)
+IG_ID = os.environ.get("IG_USER_ID", "")
+FB_PAGE = os.environ.get("FB_PAGE_ID", "")
+RATTRAPAGE_JUSQUA = 3                     # heure de Zurich : reel de la veille rattrape avant 03h00
 V = "v21.0"
 BASE = f"https://graph.facebook.com/{V}/"
 RAW = "https://raw.githubusercontent.com/Nuredin-Moh/locabus-ig/main/"
@@ -172,27 +180,82 @@ def instagram(entree, etat):
     return []
 
 
-def main():
-    mode = sys.argv[1] if len(sys.argv) > 1 else "publish-ig"
-    entrees = json.load(open("reels.json", encoding="utf-8"))
-    etat = charger_etat()
-    maintenant = datetime.now(TZ)
-    erreurs = []
+def reste_a_faire(fiche):
+    """Vrai s'il manque encore Instagram, Facebook ou la couverture Facebook."""
+    return not (fiche.get("ig") and fiche.get("fb") and fiche.get("fb_cover"))
+
+
+def selection(entrees, etat, maintenant, mode, bavard=False):
+    """Reels a traiter maintenant : liste de (entree, motif), motif = programmation | jour | rattrapage."""
+    choix = []
+    jour = maintenant.date()
     for e in entrees:
         quand = horaire(e)
         if mode == "schedule-fb":
             if quand < maintenant + timedelta(minutes=11):
-                print(f"{e['cle']} : trop proche pour une programmation FB, saute")
+                if bavard:
+                    print(f"{e['cle']} : trop proche pour une programmation FB, saute")
                 continue
+            choix.append((e, "programmation"))
+        elif quand.date() == jour:
+            if maintenant < quand - timedelta(minutes=20):
+                if bavard:
+                    print(f"{e['cle']} : prevu a {quand:%H:%M}, trop tot")
+                continue
+            choix.append((e, "jour"))
+        elif quand.date() == jour - timedelta(days=1) and maintenant.hour < RATTRAPAGE_JUSQUA:
+            # Cron GitHub parti apres minuit : le reel d'hier n'est pas perdu.
+            if reste_a_faire(etat.get(e["cle"], {})):
+                choix.append((e, "rattrapage"))
+    return choix
+
+
+def prevu(mode):
+    """Aucun appel reseau : dit s'il reste un reel a traiter maintenant (pour reels.yml)."""
+    if mode not in ("publish-ig", "schedule-fb"):
+        raise SystemExit(f"mode inconnu : {mode}")
+    entrees = json.load(open("reels.json", encoding="utf-8"))
+    etat = charger_etat()
+    maintenant = datetime.now(TZ)
+    a_faire = []
+    for e, motif in selection(entrees, etat, maintenant, mode):
+        fiche = etat.get(e["cle"], {})
+        if (mode == "schedule-fb" and not fiche.get("fb")) or (mode == "publish-ig" and reste_a_faire(fiche)):
+            a_faire.append(f"{e['cle']} ({motif})")
+    reponse = "oui" if a_faire else "non"
+    print(f"{maintenant:%d.%m.%Y %H:%M} Zurich, mode {mode} : prevu={reponse}"
+          + (" -> " + ", ".join(a_faire) if a_faire else " (aucun reel a traiter, rien a faire)"))
+    sortie = os.environ.get("GITHUB_OUTPUT")
+    if sortie:
+        with open(sortie, "a") as f:
+            f.write(f"prevu={reponse}\n")
+    return reponse
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "publish-ig"
+    if mode == "prevu":
+        prevu(sys.argv[2] if len(sys.argv) > 2 else "publish-ig")
+        return
+    if mode not in ("publish-ig", "schedule-fb"):
+        raise SystemExit(f"mode inconnu : {mode}")
+    if not (TOKEN and IG_ID and FB_PAGE):
+        raise SystemExit("IG_TOKEN, IG_USER_ID ou FB_PAGE_ID absent de l'environnement")
+    entrees = json.load(open("reels.json", encoding="utf-8"))
+    etat = charger_etat()
+    maintenant = datetime.now(TZ)
+    erreurs = []
+    for e, motif in selection(entrees, etat, maintenant, mode, bavard=True):
+        quand = horaire(e)
+        if mode == "schedule-fb":
             print(f"{e['cle']} : programmation Facebook pour {quand:%d.%m.%Y %H:%M}")
             erreurs += facebook(e, etat, programmer=True)
         else:
-            if e["date"] != maintenant.strftime("%Y-%m-%d"):
-                continue
-            if maintenant < quand - timedelta(minutes=20):
-                print(f"{e['cle']} : prevu a {quand:%H:%M}, trop tot")
-                continue
-            print(f"{e['cle']} : publication du jour")
+            if motif == "rattrapage":
+                print(f"{e['cle']} : RATTRAPAGE du reel de la veille ({quand:%d.%m.%Y %H:%M}), "
+                      f"passage GitHub en retard")
+            else:
+                print(f"{e['cle']} : publication du jour")
             erreurs += instagram(e, etat)
             fiche = etat.get(e["cle"], {})
             if not fiche.get("fb"):

@@ -2,9 +2,14 @@ name: Locabus reels (FB programme + IG le jour J)
 
 on:
   schedule:
-    - cron: '5 16 * * *'    # 18h05 suisse
-    - cron: '35 16 * * *'   # 18h35 suisse (rattrapage retard GitHub)
-    - cron: '5 17 * * *'    # 19h05 suisse (dernier filet)
+    # Heure d'hiver depuis le 25.10.2026 (Suisse = UTC+1) : decale d'une heure le 08.11.2026,
+    # sinon un seul des 3 creneaux tombait apres 18h00 suisse. En ete (UTC+2), ils partent une heure
+    # plus tard (19h05, 19h35, 20h05), toujours apres 18h00.
+    # GitHub lance souvent ces crons avec plusieurs heures de retard : publish_reels.py rattrape le reel
+    # de la veille jusqu'a 03h00 (Zurich) si le passage tombe apres minuit.
+    - cron: '5 17 * * *'    # 18h05 suisse (hiver)
+    - cron: '35 17 * * *'   # 18h35 suisse (hiver) : rattrapage retard GitHub
+    - cron: '5 18 * * *'    # 19h05 suisse (hiver) : dernier filet
   workflow_dispatch:
     inputs:
       mode:
@@ -17,11 +22,41 @@ on:
 permissions:
   contents: write
 
+# Un seul passage a la fois : quand GitHub regroupe les 3 crons en retard, le 2e attend la fin du 1er
+# (et relit l'etat a jour, voir ref: main) au lieu de publier le meme reel une 2e fois.
+concurrency:
+  group: locabus-reels
+  cancel-in-progress: false
+
 jobs:
+  # Controle leger (sans video, sans jeton) : s'il n'y a aucun reel a traiter maintenant, par exemple
+  # apres le dernier reel de reels.json, le job « reels » est saute et le passage ne fait rien.
+  # Un nouveau reel ajoute a reels.json relance tout seul le travail, sans toucher a ce fichier.
+  prevu:
+    runs-on: ubuntu-latest
+    outputs:
+      prevu: ${{ steps.controle.outputs.prevu }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          sparse-checkout: |
+            /publish_reels.py
+            /reels.json
+            /reels_state.json
+          sparse-checkout-cone-mode: false
+      - name: Un reel est-il prevu ?
+        id: controle
+        run: python3 publish_reels.py prevu ${{ github.event.inputs.mode || 'publish-ig' }}
+
   reels:
+    needs: prevu
+    if: needs.prevu.outputs.prevu == 'oui'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
