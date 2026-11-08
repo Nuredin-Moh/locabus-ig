@@ -25,7 +25,9 @@ permissions:
 # Un seul passage a la fois : quand GitHub regroupe les 3 crons en retard, le 2e attend la fin du 1er
 # (et relit l'etat a jour, voir ref: main) au lieu de publier le meme reel une 2e fois.
 concurrency:
-  group: locabus-reels
+  # un groupe par mode : la programmation Facebook (schedule-fb, lancee par la routine du vendredi)
+  # ne peut plus etre annulee par un passage cron publish-ig en attente, et inversement.
+  group: locabus-reels-${{ github.event.inputs.mode || 'publish-ig' }}
   cancel-in-progress: false
 
 jobs:
